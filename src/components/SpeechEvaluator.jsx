@@ -540,7 +540,7 @@ function SpeechEvaluator() {
     setError(null);
 
     try {
-      const response = await fetch("/api/analyze-batch", {
+      const response = await fetch("/.netlify/functions/analyze-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
