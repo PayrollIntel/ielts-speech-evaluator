@@ -540,20 +540,22 @@ function SpeechEvaluator() {
     setError(null);
 
     try {
-      const response = await fetch("/api/analyze-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          testId: currentTest.testId,
-          questions: currentTest.allQuestions.map(q => q.prompt),
-          answers,
-          audioFeatures,
-          testType: "IELTS_AUTHENTIC"
-        }),
-      });
+      // ✅ Replace your existing fetch block with this
+// FIXED CODE:
+const response = await fetch("/.netlify/functions/analyze-batch", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    testId: currentTest.testId,
+    questions: currentTest.allQuestions.map(q => q.prompt),
+    answers: answers,
+    audioFeatures: audioFeatures,
+    testType: "IELTS_AUTHENTIC"
+  }),
+});
+}); // <-- no trailing comma after this parenthesis
 
-      if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
+if (!response.ok) throw new Error(`Server error: ${response.status}`);
       const data = await response.json();
       setFeedbacks(data.feedbacks);
       setTestSummary(data.testSummary);
