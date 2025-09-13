@@ -561,8 +561,17 @@ if (!response.ok) throw new Error(`Server error: ${response.status}`);
       setTestSummary(data.testSummary);
       setShowResults(true);
     } catch (err) {
-      console.error("Analysis error:", err);
-      setError("Error during analysis. Please check your connection and try again.");
+      // Build detailed error message including response info when available
+      let errorMessage = err?.message || "Unknown error";
+      if (err?.response) {
+        const { status, statusText } = err.response;
+        errorMessage += ` (status ${status}${statusText ? `: ${statusText}` : ""})`;
+      }
+
+      console.error("Analysis error:", errorMessage, err);
+      setError(
+        `Analysis failed: ${errorMessage}. Please check your connection or ensure the backend is available.`
+      );
     } finally {
       setLoading(false);
     }
