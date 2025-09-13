@@ -1,34 +1,62 @@
-const axios = require('axios');
+const https = require('https');
+const querystring = require('querystring');
 
-// Helper functions (copied from your server.js)
+// Grammar check using LanguageTool API
 async function grammarCheck(text) {
-  try {
-    const response = await axios({
-      method: 'POST',
-      url: 'https://api.languagetool.org/v2/check',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: new URLSearchParams({
-        text,
-        language: 'en-US',
-        enabledRules: 'GRAMMAR,TYPOS,STYLE',
-        disabledRules: 'UPPERCASE_SENTENCE_START,WHITESPACE_RULE,SENTENCE_WHITESPACE',
-      }).toString(),
-      timeout: 10000,
+  return new Promise((resolve) => {
+    const postData = querystring.stringify({
+      'text': text,
+      'language': 'en-US',
+      'enabledRules': 'GRAMMAR,TYPOS,STYLE',
+      'disabledRules': 'UPPERCASE_SENTENCE_START,WHITESPACE_RULE,SENTENCE_WHITESPACE'
     });
 
-    const matches = response.data.matches.filter(
-      m => !['UPPERCASE_SENTENCE_START', 'WHITESPACE_RULE', 'SENTENCE_WHITESPACE'].includes(m.rule.id)
-    );
+    const options = {
+      hostname: 'api.languagetool.org',
+      port: 443,
+      path: '/v2/check',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
 
-    return { matches, success: true };
-  } catch (err) {
-    console.error('Grammar check error:', err.message);
-    return { matches: [], success: false, error: err.message };
-  }
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          const matches = result.matches.filter(
+            m => !['UPPERCASE_SENTENCE_START', 'WHITESPACE_RULE', 'SENTENCE_WHITESPACE'].includes(m.rule.id)
+          );
+          resolve({ matches, success: true });
+        } catch (error) {
+          console.error('Grammar check parse error:', error);
+          resolve({ matches: [], success: false, error: error.message });
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('Grammar check request error:', error);
+      resolve({ matches: [], success: false, error: error.message });
+    });
+
+    req.write(postData);
+    req.end();
+
+    // 10 second timeout
+    setTimeout(() => {
+      req.destroy();
+      resolve({ matches: [], success: false, error: 'Request timeout' });
+    }, 10000);
+  });
 }
 
+// IELTS Band calculation
 function calculateIELTSBands(grammarMatches, text, audioFeatures, questionPart) {
-  // Simplified band calculation
   const wordCount = text.split(' ').length;
   let fluency = 7;
   let lexical = 6.5;
@@ -40,15 +68,29 @@ function calculateIELTSBands(grammarMatches, text, audioFeatures, questionPart) 
     grammar = Math.max(grammar - (grammarMatches.length * 0.5), 4);
   }
 
-  // Adjust for word count based on part
+  // Part-specific adjustments
   if (questionPart === 1) {
-    if (wordCount < 15) fluency = Math.max(fluency - 0.5, 1);
-    else if (wordCount > 100) fluency = Math.max(fluency - 0.25, 1);
+    if (wordCount < 15) {
+      fluency = Math.max(fluency - 0.5, 1);
+    } else if (wordCount > 100) {
+      fluency = Math.max(fluency - 0.25, 1);
+    }
   } else if (questionPart === 2) {
     if (wordCount < 100) {
       fluency = Math.max(fluency - 1, 1);
     } else if (wordCount > 300) {
       fluency = Math.min(fluency + 0.25, 9);
+    }
+  } else if (questionPart === 3) {
+    if (wordCount < 30) {
+      fluency = Math.max(fluency - 0.75, 1);
+    }
+    
+    // Check for analytical language
+    const analyticalWords = ['however', 'therefore', 'furthermore', 'on the other hand', 'in contrast', 'consequently', 'moreover', 'nevertheless'];
+    const hasAnalyticalLanguage = analyticalWords.some(word => text.toLowerCase().includes(word));
+    if (hasAnalyticalLanguage) {
+      lexical = Math.min(lexical + 0.25, 9);
     }
   }
 
@@ -64,17 +106,23 @@ function calculateIELTSBands(grammarMatches, text, audioFeatures, questionPart) 
   };
 }
 
+// Generate IELTS feedback
 function generateIELTSFeedback(bands, metrics, grammarMatches, audioFeatures, questionPart, questionIndex) {
   let feedback = '';
 
+  // Part-specific feedback
   if (questionPart === 1) {
     feedback += `**Part 1 - Question ${questionIndex + 1}** 📝\n\n`;
+    feedback += `This is an introduction and interview question. Your response should be concise but complete.\n\n`;
   } else if (questionPart === 2) {
     feedback += `**Part 2 - Cue Card** 🎯\n\n`;
+    feedback += `This is your individual long turn. You should speak for 1-2 minutes covering all bullet points.\n\n`;
   } else if (questionPart === 3) {
     feedback += `**Part 3 - Discussion Question ${questionIndex + 1}** 💭\n\n`;
+    feedback += `This requires analytical thinking and extended responses with examples and explanations.\n\n`;
   }
 
+  // Band scores
   feedback += `**Band Scores:**\n`;
   feedback += `• Fluency & Coherence: ${bands.fluency}/9\n`;
   feedback += `• Lexical Resource: ${bands.lexical}/9\n`;
@@ -82,21 +130,64 @@ function generateIELTSFeedback(bands, metrics, grammarMatches, audioFeatures, qu
   feedback += `• Pronunciation: ${bands.pronunciation}/9\n`;
   feedback += `• **Overall: ${bands.overall}/9**\n\n`;
 
+  // Detailed feedback
   const strengths = [];
   const improvements = [];
 
+  // Fluency Analysis
   if (bands.fluency >= 7) {
     strengths.push("Good fluency and natural flow of speech");
-  } else {
+  } else if (bands.fluency >= 5) {
     improvements.push("Work on speaking more fluently with fewer pauses");
+  } else {
+    improvements.push("Practice speaking more continuously - reduce hesitation and repetition");
   }
 
+  // Lexical Analysis
+  if (bands.lexical >= 7) {
+    strengths.push("Good range of vocabulary with appropriate usage");
+  } else if (bands.lexical >= 5) {
+    improvements.push("Expand your vocabulary and use more varied expressions");
+  } else {
+    improvements.push("Focus on building fundamental vocabulary and avoiding repetition");
+  }
+
+  // Grammar Analysis
   if (grammarMatches.length === 0) {
     strengths.push("No major grammar errors detected");
+  } else if (grammarMatches.length <= 2) {
+    improvements.push(`Minor grammar issues: ${grammarMatches.length} errors found`);
   } else {
     improvements.push(`Grammar needs attention: ${grammarMatches.length} errors found`);
   }
 
+  // Part-specific feedback
+  if (questionPart === 1) {
+    const wordCount = metrics.wordCount || 0;
+    if (wordCount >= 20 && wordCount <= 60) {
+      strengths.push("Appropriate length for Part 1 response");
+    } else if (wordCount < 20) {
+      improvements.push("Extend your answers slightly - provide more detail");
+    } else {
+      improvements.push("Keep Part 1 answers more concise and to the point");
+    }
+  } else if (questionPart === 2) {
+    const wordCount = metrics.wordCount || 0;
+    if (wordCount >= 150) {
+      strengths.push("Good length for extended speaking in Part 2");
+    } else {
+      improvements.push("Speak for longer - aim for 1.5-2 minutes in Part 2");
+    }
+  } else if (questionPart === 3) {
+    const wordCount = metrics.wordCount || 0;
+    if (wordCount >= 40) {
+      strengths.push("Good depth of response for analytical discussion");
+    } else {
+      improvements.push("Provide more detailed, analytical responses in Part 3");
+    }
+  }
+
+  // Compile feedback
   if (strengths.length > 0) {
     feedback += `**Strengths:** ✅\n`;
     strengths.forEach(strength => feedback += `• ${strength}\n`);
@@ -109,6 +200,7 @@ function generateIELTSFeedback(bands, metrics, grammarMatches, audioFeatures, qu
     feedback += '\n';
   }
 
+  // Grammar errors detail
   if (grammarMatches.length > 0) {
     feedback += `**Grammar Issues:** ⚠️\n`;
     grammarMatches.slice(0, 3).forEach(match => {
@@ -123,149 +215,9 @@ function generateIELTSFeedback(bands, metrics, grammarMatches, audioFeatures, qu
   return feedback;
 }
 
-function determineQuestionPart(questionIndex, totalQuestions) {
-  if (questionIndex < 12) return 1;
-  if (questionIndex === 12) return 2;
-  return 3;
-}
-
+// Simple relevance check
 async function getRelevanceScore(prompt, answer) {
   if (!prompt || !answer) return 0;
   
-  // Simple word overlap calculation
-  const promptWords = prompt.toLowerCase().split(/\s+/);
-  const answerWords = answer.toLowerCase().split(/\s+/);
-  
-  let matches = 0;
-  const answerSet = new Set(answerWords);
-  promptWords.forEach(word => {
-    if (answerSet.has(word)) matches++;
-  });
-  
-  return matches / Math.max(promptWords.length, answerWords.length);
-}
-
-exports.handler = async (event, context) => {
-  // Enable CORS
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  };
-
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
-
-  if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ error: 'Method not allowed' })
-    };
-  }
-
-  try {
-    const { testId, questions, answers, audioFeatures, testType } = JSON.parse(event.body);
-
-    if (!Array.isArray(questions) || !Array.isArray(answers) || questions.length !== answers.length) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'Invalid request format' })
-      };
-    }
-
-    const feedbacks = [];
-    let totalFluency = 0, totalLex = 0, totalGram = 0, totalPron = 0, totalRelevance = 0, count = 0;
-    const partScores = { part1: [], part2: [], part3: [] };
-
-    for (let i = 0; i < questions.length; i++) {
-      const question = questions[i];
-      const text = answers[i] || '';
-      const features = audioFeatures?.[i];
-
-      if (!text.trim()) {
-        feedbacks.push({
-          feedback: `**Question ${i + 1}: "${question}"**\n\nNo response provided.`,
-          overall: 0,
-        });
-        continue;
-      }
-
-      const questionPart = determineQuestionPart(i, questions.length);
-      const grammarResult = await grammarCheck(text);
-      let bands = calculateIELTSBands(grammarResult.matches, text, features, questionPart);
-      const relevance = await getRelevanceScore(question, text);
-
-      if (relevance < 0.5) {
-        bands.overall = Math.max(bands.overall - 0.5, 1);
-      }
-
-      let fb = `**Question ${i + 1}: "${question}"**\n\n`;
-      fb += generateIELTSFeedback(bands, bands.metrics, grammarResult.matches, features, questionPart, i);
-      
-      if (relevance < 0.5) {
-        fb += `\n\n⚠️ Relevance Warning: Off-topic (score ${relevance.toFixed(2)})`;
-      }
-
-      feedbacks.push({ feedback: fb, overall: bands.overall });
-
-      partScores[`part${questionPart}`].push({
-        fluency: bands.fluency,
-        lexical: bands.lexical,
-        grammar: bands.grammar,
-        pronunciation: bands.pronunciation,
-        overall: bands.overall
-      });
-
-      totalFluency += bands.fluency;
-      totalLex += bands.lexical;
-      totalGram += bands.grammar;
-      totalPron += bands.pronunciation;
-      totalRelevance += relevance;
-      count++;
-    }
-
-    const summary = count ? {
-      fluency: Math.round((totalFluency / count) * 2) / 2,
-      lexical: Math.round((totalLex / count) * 2) / 2,
-      grammar: Math.round((totalGram / count) * 2) / 2,
-      pronunciation: Math.round((totalPron / count) * 2) / 2,
-      overall: Math.round(((totalFluency + totalLex + totalGram + totalPron) / (count * 4)) * 2) / 2,
-      avgRelevance: totalRelevance / count,
-      partBreakdown: {
-        part1Average: partScores.part1.length > 0 ?
-          partScores.part1.reduce((sum, score) => sum + score.overall, 0) / partScores.part1.length : 0,
-        part2Score: partScores.part2.length > 0 ? partScores.part2[0].overall : 0,
-        part3Average: partScores.part3.length > 0 ?
-          partScores.part3.reduce((sum, score) => sum + score.overall, 0) / partScores.part3.length : 0
-      }
-    } : null;
-
-    if (summary) {
-      let summaryFeedback = '\n\n**IELTS Speaking Test Summary** 🎯\n\n';
-      summaryFeedback += `**Overall Band Score: ${summary.overall}/9**\n\n`;
-      summaryFeedback += `**Performance by Part:**\n`;
-      summaryFeedback += `• Part 1 (Introduction): ${summary.partBreakdown.part1Average.toFixed(1)}/9\n`;
-      summaryFeedback += `• Part 2 (Cue Card): ${summary.partBreakdown.part2Score.toFixed(1)}/9\n`;
-      summaryFeedback += `• Part 3 (Discussion): ${summary.partBreakdown.part3Average.toFixed(1)}/9\n\n`;
-
-      feedbacks.unshift({ feedback: summaryFeedback, overall: summary.overall });
-    }
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ testId, feedbacks, testSummary: summary })
-    };
-
-  } catch (err) {
-    console.error('Batch analysis error:', err);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: 'Batch analysis error', details: err.message })
-    };
-  }
-};
+  const promptWords = prompt.toLowerCase().split(/\s+/).filter(word => word.length > 2);
+  const answerWords =
