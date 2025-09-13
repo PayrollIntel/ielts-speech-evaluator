@@ -17,6 +17,21 @@ This is a comprehensive IELTS Speaking Test evaluation application with advanced
 - Modern web browser (Chrome recommended)
 - Microphone access
 
+## Environment Setup
+
+Create environment files to configure the frontend API base URL:
+
+- `.env.development` – used when running `npm run dev`
+- `.env.production` – used for production builds
+
+Each file should define:
+
+```
+REACT_APP_API_BASE=http://localhost:5000
+```
+
+Set `REACT_APP_API_BASE` to the backend's base URL (omit the trailing slash). For production, replace the value with your deployed backend URL.
+
 ## Installation & Setup
 
 ### 1. Initial Setup

@@ -540,7 +540,7 @@ function SpeechEvaluator() {
     setError(null);
 
     try {
-      const response = await fetch("/api/analyze-batch", {
+      const response = await fetch(`${process.env.REACT_APP_API_BASE}/api/analyze-batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
